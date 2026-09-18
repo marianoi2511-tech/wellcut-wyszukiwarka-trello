@@ -1,7 +1,7 @@
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
 $ErrorActionPreference = "Stop"
-$ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
+$ScriptDir = if ($PSScriptRoot) { $PSScriptRoot } elseif ($MyInvocation.MyCommand.Path) { Split-Path -Parent $MyInvocation.MyCommand.Path } else { [AppDomain]::CurrentDomain.BaseDirectory }
 $ConfigPath = Join-Path $env:LOCALAPPDATA "WELLCUT\WyszukiwarkaTrello\config.json"
 $LogPath = Join-Path $env:LOCALAPPDATA "WELLCUT\WyszukiwarkaTrello\log.txt"
 New-Item -ItemType Directory -Force -Path (Split-Path $ConfigPath) | Out-Null
@@ -14,7 +14,7 @@ function Load-Config{if(Test-Path $ConfigPath){try{$c=Get-Content $ConfigPath -R
 function BoardId([string]$v){$v=$v.Trim();if($v -match '(?i)trello\.com/b/([A-Za-z0-9]+)'){return $Matches[1]};if($v -match '^[A-Za-z0-9]{6,32}$'){return $v};throw 'Wklej prawidłowy link do tablicy Trello.'}
 function BaseName([string]$n){(($n -split '\\')[0]).Trim()}
 function Price([string]$n){$p=$n -split '\\';if($p.Count-lt 2){return ''};$x=$p[-1].Trim();if($x -match '^\d+(?:[,.]\d{1,2})?$'){return ($x-replace '\.',',')+' zł'};''}
-function MakeLabel($parent,[string]$text,[int]$x,[int]$y,[int]$size=10,[bool]$bold=$false,$color=$null){$l=New-Object Windows.Forms.Label;$l.Text=$text;$l.Location=[Drawing.Point]::new($x,$y);$l.AutoSize=$true;$style=if($bold){[Drawing.FontStyle]::Bold}else{[Drawing.FontStyle]::Regular};$l.Font=[Drawing.Font]::new('Segoe UI',$size,$style);if($color){$l.ForeColor=$color};$parent.Controls.Add($l);$l}
+function MakeLabel($parent,[string]$text,[int]$x,[int]$y,[int]$size=10,[bool]$bold=$false,$color=[Drawing.Color]::Empty){$l=New-Object Windows.Forms.Label;$l.Text=$text;$l.Location=[Drawing.Point]::new($x,$y);$l.AutoSize=$true;$style=if($bold){[Drawing.FontStyle]::Bold}else{[Drawing.FontStyle]::Regular};$l.Font=[Drawing.Font]::new('Segoe UI',$size,$style);if($color -ne [Drawing.Color]::Empty){$l.ForeColor=$color};$parent.Controls.Add($l);$l}
 function MakeText($parent,[int]$x,[int]$y,[int]$w){$t=New-Object Windows.Forms.TextBox;$t.Location=[Drawing.Point]::new($x,$y);$t.Size=[Drawing.Size]::new($w,32);$t.Font=[Drawing.Font]::new('Segoe UI',11);$parent.Controls.Add($t);$t}
 function MakeButton($parent,[string]$text,[int]$x,[int]$y,[int]$w,$bg){$b=New-Object Windows.Forms.Button;$b.Text=$text;$b.Location=[Drawing.Point]::new($x,$y);$b.Size=[Drawing.Size]::new($w,38);$b.FlatStyle='Flat';$b.Font=[Drawing.Font]::new('Segoe UI',9,[Drawing.FontStyle]::Bold);$b.BackColor=$bg;$b.ForeColor=[Drawing.Color]::White;$parent.Controls.Add($b);$b}
 $navy=[Drawing.Color]::FromArgb(20,36,60);$blue=[Drawing.Color]::FromArgb(37,99,235);$red=[Drawing.Color]::FromArgb(220,38,38);$muted=[Drawing.Color]::FromArgb(100,116,139);$white=[Drawing.Color]::White

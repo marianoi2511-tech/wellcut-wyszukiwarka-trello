@@ -1,0 +1,26 @@
+name: Build Windows EXE
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main ]
+    paths:
+      - 'src/**'
+      - '.github/workflows/build-windows.yml'
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install ps2exe
+        shell: powershell
+        run: Install-Module ps2exe -Scope CurrentUser -Force
+      - name: Build EXE
+        shell: powershell
+        run: |
+          Import-Module ps2exe
+          Invoke-ps2exe -inputFile ".\src\WELLCUT_Wyszukiwarka_Trello.ps1" -outputFile ".\WELLCUT-Wyszukiwarka-Trello.exe" -noConsole -title "WELLCUT - Wyszukiwarka Trello" -product "WELLCUT" -version "8.0.0.0"
+      - name: Upload Windows program
+        uses: actions/upload-artifact@v4
+        with:
+          name: WELLCUT-Wyszukiwarka-Trello-Windows
+          path: WELLCUT-Wyszukiwarka-Trello.exe

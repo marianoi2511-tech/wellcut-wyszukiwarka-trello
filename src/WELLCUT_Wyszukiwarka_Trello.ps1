@@ -23,20 +23,22 @@ function MakeButton($parent,[string]$text,[int]$x,[int]$y,[int]$w,$bg){$b=New-Ob
 # Po 1000 kart na plik. Format zgodny z eksportem JSON z Trello (lists / cards / checklists).
 function Clean-FileName([string]$n){$x=($n -replace 'ł','l' -replace 'Ł','L').Normalize([Text.NormalizationForm]::FormD) -replace '\p{Mn}','';$x=($x -replace '[^A-Za-z0-9 _-]','').Trim() -replace '\s+','-';if(!$x){$x='tablica'};$x}
 function Write-JsonFile([string]$path,$obj){$json=ConvertTo-Json -InputObject $obj -Depth 8 -Compress;[IO.File]::WriteAllText($path,$json,(New-Object Text.UTF8Encoding $false))}
+# Windows PowerShell 5.1 oddaje tablicę JSON jako JEDEN element – rozwijamy ją na pojedyncze karty/listy.
+function Get-TrelloList([string]$url,[int]$timeout){$r=Invoke-RestMethod $url -TimeoutSec $timeout;foreach($x in $r){$x}}
 function Export-TrelloBoard($b,[string]$dir,[scriptblock]$progress){
  $id=BoardId $b.boardUrl;$key=Escape $b.apiKey;$tok=Escape $b.token
  $auth="key=$key&token=$tok"
  & $progress "[$($b.name)] Pobieram listy..."
  $board=Invoke-RestMethod "https://api.trello.com/1/boards/$($id)?fields=name&$auth" -TimeoutSec 60
- $lists=@(Invoke-RestMethod "https://api.trello.com/1/boards/$id/lists?filter=all&fields=id,name&$auth" -TimeoutSec 60|ForEach-Object{[ordered]@{id=[string]$_.id;name=[string]$_.name}})
+ $lists=@(Get-TrelloList "https://api.trello.com/1/boards/$id/lists?filter=all&fields=id,name&$auth" 60|ForEach-Object{[ordered]@{id=[string]$_.id;name=[string]$_.name}})
  & $progress "[$($b.name)] Pobieram karty..."
  # Same karty (bez checklist) – to samo zapytanie co przy wyszukiwaniu, Trello go nie blokuje.
- $cards=@(Invoke-RestMethod "https://api.trello.com/1/boards/$id/cards/all?fields=id,name,idList,closed,dateLastActivity&$auth" -TimeoutSec 600)
+ $cards=@(Get-TrelloList "https://api.trello.com/1/boards/$id/cards/all?fields=id,name,idList,closed,dateLastActivity&$auth" 600)
  # Checklisty: najpierw jednym zapytaniem dla całej tablicy; gdy Trello odmówi (duża tablica, błąd 403) – karta po karcie.
  $byCard=@{};$whole=$true
  try{
   & $progress "[$($b.name)] Pobieram checklisty ($($cards.Count) kart)..."
-  foreach($cl in @(Invoke-RestMethod "https://api.trello.com/1/boards/$id/checklists?fields=name,idCard&checkItems=all&checkItem_fields=name,pos&$auth" -TimeoutSec 600)){$k=[string]$cl.idCard;if(!$byCard.ContainsKey($k)){$byCard[$k]=New-Object System.Collections.ArrayList};[void]$byCard[$k].Add($cl)}
+  foreach($cl in @(Get-TrelloList "https://api.trello.com/1/boards/$id/checklists?fields=name,idCard&checkItems=all&checkItem_fields=name,pos&$auth" 600)){$k=[string]$cl.idCard;if(!$byCard.ContainsKey($k)){$byCard[$k]=New-Object System.Collections.ArrayList};[void]$byCard[$k].Add($cl)}
  }catch{$whole=$false;$byCard=@{}}
  $failed=0
  for($n=0;$n -lt $cards.Count;$n++){$c=$cards[$n];$v=@()
@@ -45,7 +47,7 @@ function Export-TrelloBoard($b,[string]$dir,[scriptblock]$progress){
    if($n % 20 -eq 0){& $progress "[$($b.name)] Checklisty karta po karcie: $n / $($cards.Count) (może potrwać kilkanaście minut)..."}
    $ok=$false
    for($try=1;$try -le 5 -and -not $ok;$try++){
-    try{$v=@(Invoke-RestMethod "https://api.trello.com/1/cards/$($c.id)/checklists?checkItems=all&checkItem_fields=name,pos&fields=name&$auth" -TimeoutSec 30);$ok=$true}
+    try{$v=@(Get-TrelloList "https://api.trello.com/1/cards/$($c.id)/checklists?checkItems=all&checkItem_fields=name,pos&fields=name&$auth" 30);$ok=$true}
     catch{Start-Sleep -Milliseconds (1500*$try)}
    }
    if(!$ok){$failed++}

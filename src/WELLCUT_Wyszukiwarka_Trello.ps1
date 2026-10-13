@@ -29,13 +29,29 @@ function Export-TrelloBoard($b,[string]$dir,[scriptblock]$progress){
  & $progress "[$($b.name)] Pobieram listy..."
  $board=Invoke-RestMethod "https://api.trello.com/1/boards/$($id)?fields=name&$auth" -TimeoutSec 60
  $lists=@(Invoke-RestMethod "https://api.trello.com/1/boards/$id/lists?filter=all&fields=id,name&$auth" -TimeoutSec 60|ForEach-Object{[ordered]@{id=[string]$_.id;name=[string]$_.name}})
- & $progress "[$($b.name)] Pobieram karty z checklistami (może potrwać kilka minut)..."
- $cards=@(Invoke-RestMethod "https://api.trello.com/1/boards/$id/cards/all?fields=id,name,idList,closed,dateLastActivity&checklists=all&checklist_fields=name,idCard&checkItem_fields=name,pos&$auth" -TimeoutSec 600)
- # Gdyby Trello nie dołączyło checklist do kart – pobieramy je jednym zapytaniem dla całej tablicy.
- if($cards.Count -and -not ($cards|Where-Object{$_.PSObject.Properties['checklists']}|Select-Object -First 1)){
-  & $progress "[$($b.name)] Pobieram checklisty..."
-  $byCard=@{};foreach($cl in @(Invoke-RestMethod "https://api.trello.com/1/boards/$id/checklists?fields=name,idCard&checkItems=all&checkItem_fields=name,pos&$auth" -TimeoutSec 600)){$k=[string]$cl.idCard;if(!$byCard.ContainsKey($k)){$byCard[$k]=New-Object System.Collections.ArrayList};[void]$byCard[$k].Add($cl)}
-  foreach($c in $cards){$v=@();if($byCard.ContainsKey([string]$c.id)){$v=@($byCard[[string]$c.id])};$c|Add-Member -NotePropertyName checklists -NotePropertyValue $v -Force}
+ & $progress "[$($b.name)] Pobieram karty..."
+ # Same karty (bez checklist) – to samo zapytanie co przy wyszukiwaniu, Trello go nie blokuje.
+ $cards=@(Invoke-RestMethod "https://api.trello.com/1/boards/$id/cards/all?fields=id,name,idList,closed,dateLastActivity&$auth" -TimeoutSec 600)
+ # Checklisty: najpierw jednym zapytaniem dla całej tablicy; gdy Trello odmówi (duża tablica, błąd 403) – karta po karcie.
+ $byCard=@{};$whole=$true
+ try{
+  & $progress "[$($b.name)] Pobieram checklisty ($($cards.Count) kart)..."
+  foreach($cl in @(Invoke-RestMethod "https://api.trello.com/1/boards/$id/checklists?fields=name,idCard&checkItems=all&checkItem_fields=name,pos&$auth" -TimeoutSec 600)){$k=[string]$cl.idCard;if(!$byCard.ContainsKey($k)){$byCard[$k]=New-Object System.Collections.ArrayList};[void]$byCard[$k].Add($cl)}
+ }catch{$whole=$false;$byCard=@{}}
+ $failed=0
+ for($n=0;$n -lt $cards.Count;$n++){$c=$cards[$n];$v=@()
+  if($whole){if($byCard.ContainsKey([string]$c.id)){$v=@($byCard[[string]$c.id])}}
+  else{
+   if($n % 20 -eq 0){& $progress "[$($b.name)] Checklisty karta po karcie: $n / $($cards.Count) (może potrwać kilkanaście minut)..."}
+   $ok=$false
+   for($try=1;$try -le 5 -and -not $ok;$try++){
+    try{$v=@(Invoke-RestMethod "https://api.trello.com/1/cards/$($c.id)/checklists?checkItems=all&checkItem_fields=name,pos&fields=name&$auth" -TimeoutSec 30);$ok=$true}
+    catch{Start-Sleep -Milliseconds (1500*$try)}
+   }
+   if(!$ok){$failed++}
+   Start-Sleep -Milliseconds 120 # Trello: max ok. 100 zapytań na 10 s
+  }
+  $c|Add-Member -NotePropertyName checklists -NotePropertyValue $v -Force
  }
  $boardName=if($board.name){[string]$board.name}else{[string]$b.name}
  $safe=Clean-FileName $boardName
@@ -57,7 +73,7 @@ function Export-TrelloBoard($b,[string]$dir,[scriptblock]$progress){
   Write-JsonFile $path $obj
   $files+=$path
  }
- [pscustomobject]@{board=$boardName;cards=$cards.Count;files=$files}
+ [pscustomobject]@{board=$boardName;cards=$cards.Count;files=$files;failed=$failed}
 }
 # --- EKSPORT END ---
 $navy=[Drawing.Color]::FromArgb(20,36,60);$blue=[Drawing.Color]::FromArgb(37,99,235);$red=[Drawing.Color]::FromArgb(220,38,38);$muted=[Drawing.Color]::FromArgb(100,116,139);$white=[Drawing.Color]::White
@@ -98,7 +114,7 @@ $btnExport.Add_Click({
  try{$boards=@(@($script:cfg.board1,$script:cfg.board2)|Where-Object{$_.apiKey -and $_.token -and $_.boardUrl});if(!$boards.Count){throw 'Najpierw uzupełnij USTAWIENIA.'}
   $dir=Join-Path ([Environment]::GetFolderPath('Desktop')) 'WELLCUT-Wieczne-archiwum-Trello';New-Item -ItemType Directory -Force -Path $dir|Out-Null
   $btnExport.Enabled=$false;$btnSearch.Enabled=$false;$summary=@()
-  foreach($b in $boards){$r=Export-TrelloBoard $b $dir {param($t)$status.Text=$t;[Windows.Forms.Application]::DoEvents()};$summary+="$($r.board): $($r.cards) kart, plików: $($r.files.Count)"}
+  foreach($b in $boards){$r=Export-TrelloBoard $b $dir {param($t)$status.Text=$t;[Windows.Forms.Application]::DoEvents()};$line="$($r.board): $($r.cards) kart, plików: $($r.files.Count)";if($r.failed){$line+=" (bez checklist: $($r.failed) kart – spróbuj ponownie później)"};$summary+=$line}
   $status.Text='Eksport gotowy'
   [Windows.Forms.MessageBox]::Show(("Zapisano na pulpicie w folderze:`n$dir`n`n"+($summary -join "`n")+"`n`nW WELLCUT: W. ARCHIWUM -> Dodaj plik... -> zaznacz wszystkie pliki z tego folderu."),'Eksport do wiecznego archiwum')|Out-Null
   Start-Process explorer.exe $dir

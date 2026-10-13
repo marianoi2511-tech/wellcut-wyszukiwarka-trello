@@ -17,12 +17,56 @@ function Price([string]$n){$p=$n -split '\\';if($p.Count-lt 2){return ''};$x=$p[
 function MakeLabel($parent,[string]$text,[int]$x,[int]$y,[int]$size=10,[bool]$bold=$false,$color=[Drawing.Color]::Empty){$l=New-Object Windows.Forms.Label;$l.Text=$text;$l.Location=[Drawing.Point]::new($x,$y);$l.AutoSize=$true;$style=if($bold){[Drawing.FontStyle]::Bold}else{[Drawing.FontStyle]::Regular};$l.Font=[Drawing.Font]::new('Segoe UI',$size,$style);if($color -ne [Drawing.Color]::Empty){$l.ForeColor=$color};$parent.Controls.Add($l);$l}
 function MakeText($parent,[int]$x,[int]$y,[int]$w){$t=New-Object Windows.Forms.TextBox;$t.Location=[Drawing.Point]::new($x,$y);$t.Size=[Drawing.Size]::new($w,32);$t.Font=[Drawing.Font]::new('Segoe UI',11);$parent.Controls.Add($t);$t}
 function MakeButton($parent,[string]$text,[int]$x,[int]$y,[int]$w,$bg){$b=New-Object Windows.Forms.Button;$b.Text=$text;$b.Location=[Drawing.Point]::new($x,$y);$b.Size=[Drawing.Size]::new($w,38);$b.FlatStyle='Flat';$b.Font=[Drawing.Font]::new('Segoe UI',9,[Drawing.FontStyle]::Bold);$b.BackColor=$bg;$b.ForeColor=[Drawing.Color]::White;$parent.Controls.Add($b);$b}
+# --- EKSPORT START ---
+# Eksport tablicy do plików JSON dla WIECZNEGO ARCHIWUM w WELLCUT (W. ARCHIWUM -> Dodaj plik...).
+# Zapisuje tylko to, co potrzebne do wyszukiwania cen: nazwy kart, listy, checklisty z pozycjami i daty.
+# Po 1000 kart na plik. Format zgodny z eksportem JSON z Trello (lists / cards / checklists).
+function Clean-FileName([string]$n){$x=($n -replace 'ł','l' -replace 'Ł','L').Normalize([Text.NormalizationForm]::FormD) -replace '\p{Mn}','';$x=($x -replace '[^A-Za-z0-9 _-]','').Trim() -replace '\s+','-';if(!$x){$x='tablica'};$x}
+function Write-JsonFile([string]$path,$obj){$json=ConvertTo-Json -InputObject $obj -Depth 8 -Compress;[IO.File]::WriteAllText($path,$json,(New-Object Text.UTF8Encoding $false))}
+function Export-TrelloBoard($b,[string]$dir,[scriptblock]$progress){
+ $id=BoardId $b.boardUrl;$key=Escape $b.apiKey;$tok=Escape $b.token
+ $auth="key=$key&token=$tok"
+ & $progress "[$($b.name)] Pobieram listy..."
+ $board=Invoke-RestMethod "https://api.trello.com/1/boards/$($id)?fields=name&$auth" -TimeoutSec 60
+ $lists=@(Invoke-RestMethod "https://api.trello.com/1/boards/$id/lists?filter=all&fields=id,name&$auth" -TimeoutSec 60|ForEach-Object{[ordered]@{id=[string]$_.id;name=[string]$_.name}})
+ & $progress "[$($b.name)] Pobieram karty z checklistami (może potrwać kilka minut)..."
+ $cards=@(Invoke-RestMethod "https://api.trello.com/1/boards/$id/cards/all?fields=id,name,idList,closed,dateLastActivity&checklists=all&checklist_fields=name,idCard&checkItem_fields=name,pos&$auth" -TimeoutSec 600)
+ # Gdyby Trello nie dołączyło checklist do kart – pobieramy je jednym zapytaniem dla całej tablicy.
+ if($cards.Count -and -not ($cards|Where-Object{$_.PSObject.Properties['checklists']}|Select-Object -First 1)){
+  & $progress "[$($b.name)] Pobieram checklisty..."
+  $byCard=@{};foreach($cl in @(Invoke-RestMethod "https://api.trello.com/1/boards/$id/checklists?fields=name,idCard&checkItems=all&checkItem_fields=name,pos&$auth" -TimeoutSec 600)){$k=[string]$cl.idCard;if(!$byCard.ContainsKey($k)){$byCard[$k]=New-Object System.Collections.ArrayList};[void]$byCard[$k].Add($cl)}
+  foreach($c in $cards){$v=@();if($byCard.ContainsKey([string]$c.id)){$v=@($byCard[[string]$c.id])};$c|Add-Member -NotePropertyName checklists -NotePropertyValue $v -Force}
+ }
+ $boardName=if($board.name){[string]$board.name}else{[string]$b.name}
+ $safe=Clean-FileName $boardName
+ $files=@();$part=0
+ for($i=0;$i -lt $cards.Count;$i+=1000){
+  $part++;$chunk=@($cards[$i..([Math]::Min($i+999,$cards.Count-1))])
+  $outCards=New-Object System.Collections.ArrayList;$outLists=New-Object System.Collections.ArrayList
+  foreach($c in $chunk){
+   $ids=New-Object System.Collections.ArrayList
+   foreach($cl in @($c.checklists)){if(!$cl){continue}
+    [void]$ids.Add([string]$cl.id)
+    $items=@(@($cl.checkItems)|Where-Object{$_}|ForEach-Object{[ordered]@{name=[string]$_.name;pos=$_.pos}})
+    [void]$outLists.Add([ordered]@{id=[string]$cl.id;idCard=[string]$c.id;name=[string]$cl.name;checkItems=$items})}
+   [void]$outCards.Add([ordered]@{id=[string]$c.id;name=[string]$c.name;idList=[string]$c.idList;closed=[bool]$c.closed;dateLastActivity=[string]$c.dateLastActivity;idChecklists=@($ids)})
+  }
+  $obj=[ordered]@{name=$boardName;exportedBy='WELLCUT Wyszukiwarka Trello';exportedAt=(Get-Date).ToUniversalTime().ToString('o');lists=$lists;cards=@($outCards);checklists=@($outLists)}
+  $path=Join-Path $dir ("trello-$safe-$part.json")
+  & $progress "[$($b.name)] Zapisuję plik $part ($($chunk.Count) kart)..."
+  Write-JsonFile $path $obj
+  $files+=$path
+ }
+ [pscustomobject]@{board=$boardName;cards=$cards.Count;files=$files}
+}
+# --- EKSPORT END ---
 $navy=[Drawing.Color]::FromArgb(20,36,60);$blue=[Drawing.Color]::FromArgb(37,99,235);$red=[Drawing.Color]::FromArgb(220,38,38);$muted=[Drawing.Color]::FromArgb(100,116,139);$white=[Drawing.Color]::White
 $form=New-Object Windows.Forms.Form;$form.Text='WELLCUT - Wyszukiwarka Trello';$form.Size=[Drawing.Size]::new(1180,760);$form.MinimumSize=[Drawing.Size]::new(980,650);$form.StartPosition='CenterScreen';$form.Font=[Drawing.Font]::new('Segoe UI',10);$form.BackColor=[Drawing.Color]::FromArgb(244,247,251)
 $header=New-Object Windows.Forms.Panel;$header.Dock='Top';$header.Height=76;$header.BackColor=$navy;$form.Controls.Add($header)
 $logo=New-Object Windows.Forms.Label;$logo.Text='W';$logo.Location=[Drawing.Point]::new(22,14);$logo.Size=[Drawing.Size]::new(48,48);$logo.TextAlign='MiddleCenter';$logo.BackColor=$blue;$logo.ForeColor=$white;$logo.Font=[Drawing.Font]::new('Segoe UI',24,[Drawing.FontStyle]::Bold);$header.Controls.Add($logo)
 [void](MakeLabel $header 'WELLCUT' 84 14 16 $true $white);[void](MakeLabel $header 'Wyszukiwarka Trello' 84 42 10 $false ([Drawing.Color]::FromArgb(203,213,225)))
 $btnSettings=MakeButton $header 'USTAWIENIA' 1000 19 140 ([Drawing.Color]::FromArgb(51,65,85));$btnSettings.Anchor='Top,Right'
+$btnExport=MakeButton $header 'EKSPORT DO WIECZNEGO ARCHIWUM' 740 19 250 ([Drawing.Color]::FromArgb(22,163,74));$btnExport.Anchor='Top,Right'
 $card=New-Object Windows.Forms.Panel;$card.Location=[Drawing.Point]::new(20,94);$card.Size=[Drawing.Size]::new(1125,168);$card.Anchor='Top,Left,Right';$card.BackColor=$white;$form.Controls.Add($card)
 [void](MakeLabel $card 'Wyszukiwanie detali' 20 14 13 $true $navy);[void](MakeLabel $card 'Przeszukaj jedną lub obie tablice Trello' 20 42 9 $false $muted)
 [void](MakeLabel $card 'TABLICE' 20 74 8 $true $muted);$cmb=New-Object Windows.Forms.ComboBox;$cmb.Location=[Drawing.Point]::new(20,96);$cmb.Size=[Drawing.Size]::new(260,30);$cmb.DropDownStyle='DropDownList';$card.Controls.Add($cmb)
@@ -49,6 +93,16 @@ $btnSettings.Add_Click({
  $save=MakeButton $s 'ZAPISZ' 580 425 105 $blue
  $save.Add_Click({$b1=@{name=$controls[0].n.Text;apiKey=$controls[0].a.Text;token=$controls[0].t.Text;boardUrl=$controls[0].u.Text};$b2=@{name=$controls[1].n.Text;apiKey=$controls[1].a.Text;token=$controls[1].t.Text;boardUrl=$controls[1].u.Text};Save-Config $b1 $b2;$script:cfg=Load-Config;RefreshNames;$s.Close()})
  [void]$s.ShowDialog($form)
+})
+$btnExport.Add_Click({
+ try{$boards=@(@($script:cfg.board1,$script:cfg.board2)|Where-Object{$_.apiKey -and $_.token -and $_.boardUrl});if(!$boards.Count){throw 'Najpierw uzupełnij USTAWIENIA.'}
+  $dir=Join-Path ([Environment]::GetFolderPath('Desktop')) 'WELLCUT-Wieczne-archiwum-Trello';New-Item -ItemType Directory -Force -Path $dir|Out-Null
+  $btnExport.Enabled=$false;$btnSearch.Enabled=$false;$summary=@()
+  foreach($b in $boards){$r=Export-TrelloBoard $b $dir {param($t)$status.Text=$t;[Windows.Forms.Application]::DoEvents()};$summary+="$($r.board): $($r.cards) kart, plików: $($r.files.Count)"}
+  $status.Text='Eksport gotowy'
+  [Windows.Forms.MessageBox]::Show(("Zapisano na pulpicie w folderze:`n$dir`n`n"+($summary -join "`n")+"`n`nW WELLCUT: W. ARCHIWUM -> Dodaj plik... -> zaznacz wszystkie pliki z tego folderu."),'Eksport do wiecznego archiwum')|Out-Null
+  Start-Process explorer.exe $dir
+ }catch{[Windows.Forms.MessageBox]::Show($_.Exception.Message,'Błąd eksportu')|Out-Null;$status.Text='Błąd eksportu'}finally{$btnExport.Enabled=$true;$btnSearch.Enabled=$true}
 })
 $btnStop.Add_Click({$script:cancelRequested=$true})
 $btnSearch.Add_Click({
